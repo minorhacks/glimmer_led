@@ -1,0 +1,60 @@
+name: CI Checks
+
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  building:
+    name: build
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      matrix:
+        rust: [nightly, stable]
+        include:
+          - rust: nightly
+            experimental: true
+        os:
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+      - run: cargo install flip-link
+      - run: rustup target install --toolchain=${{ matrix.rust }} thumbv6m-none-eabi
+      - run: cargo build --all
+      - run: cargo build --all --release
+  linting:
+    name: lint-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+      - run: rustup target install thumbv6m-none-eabi
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features -- -D warnings
+  formatting:
+    name: format-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: rustup target install thumbv6m-none-eabi
+      - run: cargo fmt -- --check

@@ -1,25 +1,23 @@
-use embassy_rp::{clocks, dma, into_ref, pio, Peripheral, PeripheralRef};
+use embassy_rp::{clocks, dma, pio as rp_pio, Peri, PeripheralType};
 use fixed::traits::ToFixed;
 
-pub struct Ws2812<'d, PIO: pio::Instance, const SM: usize, DMA> {
-    sm: pio::StateMachine<'d, PIO, SM>,
-    dma: PeripheralRef<'d, DMA>,
+pub struct Ws2812<'d, PIO: rp_pio::Instance, const SM: usize, DMA: PeripheralType> {
+    sm: rp_pio::StateMachine<'d, PIO, SM>,
+    dma: Peri<'d, DMA>,
 }
 
-impl<'d, PIO: pio::Instance, const SM: usize, DMA> Ws2812<'d, PIO, SM, DMA>
+impl<'d, PIO: rp_pio::Instance, const SM: usize, DMA> Ws2812<'d, PIO, SM, DMA>
 where
-    DMA: dma::Channel,
+    DMA: dma::Channel + PeripheralType,
 {
     pub fn new(
-        pio: &mut pio::Common<'d, PIO>,
-        mut sm: pio::StateMachine<'d, PIO, SM>,
-        dma: impl Peripheral<P = DMA> + 'd,
-        pin: impl pio::PioPin,
+        pio: &mut rp_pio::Common<'d, PIO>,
+        mut sm: rp_pio::StateMachine<'d, PIO, SM>,
+        dma: Peri<'d, DMA>,
+        pin: Peri<'d, impl rp_pio::PioPin + 'd>,
     ) -> Self {
-        into_ref!(dma);
-
         let pin = pio.make_pio_pin(pin);
-        sm.set_pin_dirs(pio::Direction::Out, &[&pin]);
+        sm.set_pin_dirs(rp_pio::Direction::Out, &[&pin]);
 
         // Standard WS2812B protocol:
         // 800kHz data rate
@@ -27,7 +25,7 @@ where
         // T1H: 0.8us, T1L: 0.45us
         // Error of +/- 150ns allowed.
 
-        let prg = pio_proc::pio_asm!(
+        let prg = pio::pio_asm!(
             ".side_set 1",
             ".wrap_target",
             "bitloop:",
@@ -42,34 +40,34 @@ where
 
         let relocated = pio.load_program(&prg.program);
 
-        let mut cfg = pio::Config::default();
+        let mut cfg = rp_pio::Config::default();
 
         // Pin configuration
         cfg.use_program(&relocated, &[&pin]);
         cfg.shift_in.auto_fill = false; // We are outputting only
         cfg.shift_out.auto_fill = true; // Auto pull from FIFO
-        cfg.shift_out.threshold = 8;    // 8 bit threshold (byte by byte)
-        cfg.shift_out.direction = pio::ShiftDirection::Left; // MSB first
-        cfg.fifo_join = pio::FifoJoin::TxOnly;
+        cfg.shift_out.threshold = 8; // 8 bit threshold (byte by byte)
+        cfg.shift_out.direction = rp_pio::ShiftDirection::Left; // MSB first
+        cfg.fifo_join = rp_pio::FifoJoin::TxOnly;
 
         // Clock configuration
         // Standard: 800kHz = 1.25us per bit.
         // With 10 cycles per bit, clock = 8MHz.
-        
+
         let freq = 8_000_000;
         cfg.clock_divider = (clocks::clk_sys_freq() / freq).to_fixed();
 
         sm.set_config(&cfg);
         sm.set_enable(true);
 
-        Self {
-            sm,
-            dma: dma.into_ref(),
-        }
+        Self { sm, dma }
     }
 
     pub async fn write(&mut self, colors: &[u8]) {
-        self.sm.tx().dma_push(self.dma.reborrow(), colors).await;
+        self.sm
+            .tx()
+            .dma_push(self.dma.reborrow(), colors, false)
+            .await;
         embassy_time::Timer::after_micros(60).await;
     }
 }

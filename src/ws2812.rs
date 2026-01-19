@@ -70,5 +70,6 @@ where
 
     pub async fn write(&mut self, colors: &[u8]) {
         self.sm.tx().dma_push(self.dma.reborrow(), colors).await;
+        embassy_time::Timer::after_micros(60).await;
     }
 }
